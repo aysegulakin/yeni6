@@ -1,0 +1,168 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>WebRTC Sesli Arama</title>
+</head>
+<body>
+    <h1>WebRTC Sesli Arama</h1>
+    <p>Mikrofon erişimi için izin verin...</p>
+
+    <button id="startCallBtn">Çağrı Başlat</button>
+    <button id="acceptCallBtn" disabled>Çağrıyı Kabul Et</button>
+    <button id="endCallBtn" disabled>Çağrıyı Bitir</button>
+    <button id="muteBtn" disabled>Sessize Al</button>
+    <button id="unmuteBtn" disabled>Sessize Aç</button>
+
+    <script>
+        // WebRTC ve signaling için gerekli yapı
+        const signalingChannel = new WebSocket('ws://localhost:8080'); // WebSocket sunucu adresi
+        let peerConnection;
+        let localStream;
+        let remoteStream;
+
+        // WebRTC bağlantı ayarları
+        const configuration = {
+            iceServers: [
+                { urls: 'stun:stun.l.google.com:19302' },
+                {
+                    urls: 'turn:your-turn-server.com',
+                    username: 'user',
+                    credential: 'password'
+                }
+            ]
+        };
+        
+
+        // Medya akışlarını al
+        async function openMediaDevices(constraints) {
+            return await navigator.mediaDevices.getUserMedia(constraints);
+        }
+
+        // Çağrı başlatma
+        async function startCall() {
+    try {
+        localStream = await openMediaDevices({ audio: true });
+        const audioElement = document.createElement('audio');
+        audioElement.srcObject = localStream;
+        audioElement.autoplay = true;
+        document.body.appendChild(audioElement);
+
+        peerConnection = new RTCPeerConnection(configuration);
+        localStream.getTracks().forEach(track => peerConnection.addTrack(track, localStream));
+
+        // ICE adaylarını gönder
+        peerConnection.onicecandidate = (event) => {
+            if (event.candidate) {
+                signalingChannel.send(JSON.stringify({ iceCandidate: event.candidate }));
+            }
+        };
+
+        const offer = await peerConnection.createOffer();
+        await peerConnection.setLocalDescription(offer);
+        signalingChannel.send(JSON.stringify({ offer }));
+
+        document.getElementById("endCallBtn").disabled = false;
+        document.getElementById("muteBtn").disabled = false;
+
+    } catch (error) {
+        console.error('Mikrofon erişimi reddedildi.', error);
+    }
+}
+
+
+        // Çağrıyı kabul etme
+        async function acceptCall(message) {
+    try {
+        peerConnection = new RTCPeerConnection(configuration);
+
+        // ICE adaylarını gönder
+        peerConnection.onicecandidate = (event) => {
+            if (event.candidate) {
+                signalingChannel.send(JSON.stringify({ iceCandidate: event.candidate }));
+            }
+        };
+
+        await peerConnection.setRemoteDescription(new RTCSessionDescription(message.offer));
+        const answer = await peerConnection.createAnswer();
+        await peerConnection.setLocalDescription(answer);
+        signalingChannel.send(JSON.stringify({ answer }));
+
+        peerConnection.ontrack = (event) => {
+            remoteStream = event.streams[0];
+            const audioElement = document.createElement('audio');
+            audioElement.srcObject = remoteStream;
+            audioElement.autoplay = true;
+            document.body.appendChild(audioElement);
+        };
+
+        document.getElementById("endCallBtn").disabled = false;
+        document.getElementById("muteBtn").disabled = false;
+    } catch (error) {
+        console.error('Hata oluştu: ', error);
+    }
+}
+
+
+        // Çağrıyı sonlandırma
+        function endCall() {
+            peerConnection.close();
+            localStream.getTracks().forEach(track => track.stop());
+            remoteStream.getTracks().forEach(track => track.stop());
+            signalingChannel.send(JSON.stringify({ end: true }));
+
+            document.getElementById("endCallBtn").disabled = true;
+            document.getElementById("muteBtn").disabled = true;
+            document.getElementById("unmuteBtn").disabled = true;
+        }
+
+        // Ses açma ve kapama
+        function muteCall() {
+            localStream.getTracks().forEach(track => track.enabled = false);
+            document.getElementById("unmuteBtn").disabled = false;
+        }
+
+        function unmuteCall() {
+            localStream.getTracks().forEach(track => track.enabled = true);
+            document.getElementById("unmuteBtn").disabled = true;
+        }
+
+        // WebSocket işaretleme sunucu mesajları
+        signalingChannel.onmessage = (event) => {
+    const message = JSON.parse(event.data);
+
+    if (message.offer) {
+        // Çağrı teklifi alındığında
+        document.getElementById("acceptCallBtn").disabled = false;
+        document.getElementById("acceptCallBtn").onclick = () => acceptCall(message);
+    } else if (message.answer) {
+        // Yanıt alındığında
+        peerConnection.setRemoteDescription(new RTCSessionDescription(message.answer));
+    } else if (message.iceCandidate) {
+        // ICE adayları alındığında ekle
+        peerConnection.addIceCandidate(new RTCIceCandidate(message.iceCandidate)).catch(console.error);
+    }
+};
+
+
+        signalingChannel.onopen = () => {
+            console.log("WebSocket bağlantısı kuruldu.");
+        };
+
+        signalingChannel.onerror = (error) => {
+            console.error("WebSocket hatası: ", error);
+        };
+
+        signalingChannel.onclose = () => {
+            console.log("WebSocket bağlantısı kapandı.");
+        };
+
+        // Butonlar
+        document.getElementById("startCallBtn").addEventListener('click', startCall);
+        document.getElementById("endCallBtn").addEventListener('click', endCall);
+        document.getElementById("muteBtn").addEventListener('click', muteCall);
+        document.getElementById("unmuteBtn").addEventListener('click', unmuteCall);
+    </script>
+</body>
+</html>
